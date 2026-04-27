@@ -1,0 +1,67 @@
+name: JEPX Time-Series Sync
+on:
+  schedule:
+    - cron: "30 * * * *" 
+  workflow_dispatch: 
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Libs
+        run: pip install requests pandas
+
+      - name: Run Sync
+        env:
+          M_API: ${{ secrets.MAIRA_API_KEY }}
+          M_PROJ: ${{ secrets.MAIRA_PROJECT_KEY }}
+          M_ID: ${{ secrets.MAIRA_DATASET_ID }}
+        run: |
+          python - <<EOF
+          import requests
+          import pandas as pd
+          import io
+          import os
+
+          # 1. Get Data from JEPX
+          df = pd.read_csv("https://www.jepx.jp/market/excel/spot_2026.csv", encoding='shift_jis')
+          
+          # 2. Format today's data
+          latest = df.tail(48).copy()
+          def to_iso(row):
+              d, s = row.iloc[0].replace('/', '-'), int(row.iloc[1])
+              return f"{d}T{(s-1)//2:02}:{'00' if s%2!=0 else '30'}:00Z"
+          
+          latest['timestamp'] = latest.apply(to_iso, axis=1)
+          
+          final_df = pd.DataFrame({
+              "timestamp": latest['timestamp'],
+              "tokyo": latest.iloc[:, 11].astype(float),
+              "kansai": latest.iloc[:, 14].astype(float),
+              "hokkaido": latest.iloc[:, 4].astype(float)
+          })
+
+          # 3. Push to Maira
+          csv_buf = io.BytesIO()
+          final_df.to_csv(csv_buf, index=False)
+          csv_buf.seek(0)
+
+          ds_id = os.environ['M_ID'].strip()
+          api_url = f"https://api.recommender.gigalogy.com/v1/gpt/datasets_ts/{ds_id}/file"
+          
+          headers = {
+              "api-key": os.environ['M_API'].strip(),
+              "project-key": os.environ['M_PROJ'].strip()
+          }
+          
+          files = {'dataset_file': ('data.csv', csv_buf, 'text/csv')}
+          response = requests.put(api_url, headers=headers, files=files)
+          
+          print(f"Status: {response.status_code}")
+          print(f"Result: {response.text}")
+          EOF
