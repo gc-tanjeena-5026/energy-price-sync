@@ -1,7 +1,7 @@
-name: Kankyo-Ichiba Ultimate Bypass
+name: JEPX Official All-Region Sync
 on:
   schedule:
-    - cron: "0 * * * *" 
+    - cron: "50 * * * *" 
   workflow_dispatch: 
 
 jobs:
@@ -14,9 +14,9 @@ jobs:
           python-version: '3.10'
 
       - name: Install Libs
-        run: pip install requests pandas beautifulsoup4
+        run: pip install requests pandas
 
-      - name: Scrape with Proxy Logic
+      - name: Run Official Sync
         env:
           M_API: ${{ secrets.MAIRA_API_KEY }}
           M_PROJ: ${{ secrets.MAIRA_PROJECT_KEY }}
@@ -24,69 +24,50 @@ jobs:
         run: |
           python - <<EOF
           import requests
-          from bs4 import BeautifulSoup
           import pandas as pd
           import io
           import os
           from datetime import datetime
 
-          # We are using a 'User-Agent' rotation and a session-less request
-          # to try and slip past the SSLV3 alert.
-          regions = {
-              "hokkaido": "https://kankyo-ichiba.jp/hokkaido",
-              "tokyo": "https://kankyo-ichiba.jp/tokyo",
-              "kansai": "https://kankyo-ichiba.jp/kansai",
-              "kyushu": "https://kankyo-ichiba.jp/kyushu"
-          }
+          # 1. Official Source (This is what Kankyo-Ichiba uses internally)
+          url = "https://www.jepx.jp/market/excel/spot_2026.csv"
+          df = pd.read_csv(url, encoding='shift_jis')
+          
+          # 2. Filter for Today
+          today_str = datetime.now().strftime('%Y/%m/%d')
+          df_today = df[df.iloc[:, 0] == today_str].copy()
 
-          all_frames = []
-          today_date = datetime.now().strftime('%Y-%m-%d')
+          if df_today.empty:
+              df_today = df.tail(48).copy()
 
-          # TECHNICAL TRICK: We use a different library 'urllib3' logic internally 
-          # via requests but with a specific cipher suite.
-          requests.packages.urllib3.util.ssl_.DEFAULT_CIPHERS += ':HIGH:!DH:!aNULL'
-          try:
-              requests.packages.urllib3.contrib.pyopenssl.util.ssl_.DEFAULT_CIPHERS += ':HIGH:!DH:!aNULL'
-          except AttributeError:
-              pass
+          # 3. Format Time (Slot 1-48 to ISO Time)
+          def to_iso(row):
+              d, s = row.iloc[0].replace('/', '-'), int(row.iloc[1])
+              return f"{d}T{(s-1)//2:02}:{'00' if s%2!=0 else '30'}:00Z"
+          
+          final_df = pd.DataFrame()
+          final_df['timestamp'] = df_today.apply(to_iso, axis=1)
+          
+          # Mapping to match all regional markets
+          final_df['hokkaido'] = df_today.iloc[:, 4].astype(float)
+          final_df['tohoku']   = df_today.iloc[:, 5].astype(float)
+          final_df['tokyo']    = df_today.iloc[:, 11].astype(float)
+          final_df['chubu']    = df_today.iloc[:, 12].astype(float)
+          final_df['hokuriku'] = df_today.iloc[:, 13].astype(float)
+          final_df['kansai']   = df_today.iloc[:, 14].astype(float)
+          final_df['chugoku']  = df_today.iloc[:, 15].astype(float)
+          final_df['shikoku']  = df_today.iloc[:, 16].astype(float)
+          final_df['kyushu']   = df_today.iloc[:, 19].astype(float)
 
-          for name, url in regions.items():
-              try:
-                  print(f"Bypassing for {name}...")
-                  # We use a very specific browser header to look like a Mac user
-                  headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'}
-                  
-                  res = requests.get(url, headers=headers, timeout=30)
-                  res.raise_for_status()
-                  
-                  soup = BeautifulSoup(res.text, 'html.parser')
-                  data_list = []
-                  for row in soup.find_all('tr'):
-                      cols = row.find_all('td')
-                      if len(cols) >= 2:
-                          time_text = cols[0].get_text(strip=True)
-                          price_text = cols[1].get_text(strip=True).replace('円', '').replace(',', '').strip()
-                          try:
-                              price_val = float(price_text)
-                              data_list.append({"timestamp": f"{today_date}T{time_text}:00Z", name: price_val})
-                          except: continue
-                  
-                  if data_list:
-                      all_frames.append(pd.DataFrame(data_list).set_index('timestamp'))
-              except Exception as e:
-                  print(f"Failed: {e}")
+          # 4. Push to Maira
+          csv_buf = io.BytesIO()
+          final_df.to_csv(csv_buf, index=False)
+          csv_buf.seek(0)
 
-          if all_frames:
-              final_df = pd.concat(all_frames, axis=1).sort_index().reset_index()
-              csv_buf = io.BytesIO()
-              final_df.to_csv(csv_buf, index=False)
-              csv_buf.seek(0)
-              
-              ds_id = os.environ['M_ID'].strip()
-              api_url = f"https://api.recommender.gigalogy.com/v1/gpt/datasets_ts/{ds_id}/file"
-              api_headers = {"api-key": os.environ['M_API'].strip(), "project-key": os.environ['M_PROJ'].strip()}
-              response = requests.put(api_url, headers=api_headers, files={'dataset_file': ('data.csv', csv_buf, 'text/csv')})
-              print(f"Success! Maira Status: {response.status_code}")
-          else:
-              print("Website is still blocking. We may need to use a headless browser (Selenium).")
+          ds_id = os.environ['M_ID'].strip()
+          api_url = f"https://api.recommender.gigalogy.com/v1/gpt/datasets_ts/{ds_id}/file"
+          headers = {"api-key": os.environ['M_API'].strip(), "project-key": os.environ['M_PROJ'].strip()}
+          
+          response = requests.put(api_url, headers=headers, files={'dataset_file': ('japan_energy.csv', csv_buf, 'text/csv')})
+          print(f"Status: {response.status_code} | Result: {response.text}")
           EOF
