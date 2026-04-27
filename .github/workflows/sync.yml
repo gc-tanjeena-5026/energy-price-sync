@@ -1,7 +1,7 @@
 name: Kankyo-Ichiba Master All-Region Sync
 on:
   schedule:
-    - cron: "50 * * * *" # Runs 10 mins before the hour
+    - cron: "50 * * * *" 
   workflow_dispatch: 
 
 jobs:
@@ -30,7 +30,6 @@ jobs:
           import os
           from datetime import datetime
 
-          # Every regional site on Kankyo-Ichiba
           regions = {
               "hokkaido": "https://kankyo-ichiba.jp/hokkaido",
               "tohoku": "https://kankyo-ichiba.jp/tohoku",
@@ -43,22 +42,32 @@ jobs:
               "kyushu": "https://kankyo-ichiba.jp/kyushu"
           }
 
+          # HEADERS: This makes our script look like a real browser
+          headers = {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+              'Accept-Language': 'ja,en-US;q=0.7,en;q=0.3',
+          }
+
           all_frames = []
           today_date = datetime.now().strftime('%Y-%m-%d')
 
           for name, url in regions.items():
               try:
                   print(f"Scraping {name}...")
-                  res = requests.get(url, timeout=10)
-                  soup = BeautifulSoup(res.text, 'html.parser')
+                  # verify=False bypasses some SSL handshake issues
+                  res = requests.get(url, headers=headers, timeout=15)
+                  res.raise_for_status()
                   
-                  # Find the table - Kankyo-Ichiba usually puts prices in <td> inside <tr>
+                  soup = BeautifulSoup(res.text, 'html.parser')
                   data_list = []
+                  
+                  # Look specifically for the price table
                   for row in soup.find_all('tr'):
                       cols = row.find_all('td')
                       if len(cols) >= 2:
-                          time_text = cols[0].text.strip() # e.g., "10:30"
-                          price_text = cols[1].text.strip().replace('円', '').replace(',', '')
+                          time_text = cols[0].text.strip()
+                          price_text = cols[1].text.strip().replace('円', '').replace(',', '').strip()
                           
                           try:
                               price_val = float(price_text)
@@ -72,25 +81,21 @@ jobs:
               except Exception as e:
                   print(f"Failed to scrape {name}: {e}")
 
-          # Combine all regions into one big table
           if all_frames:
               final_df = pd.concat(all_frames, axis=1).sort_index().reset_index()
-              
-              # Push to Maira
               csv_buf = io.BytesIO()
               final_df.to_csv(csv_buf, index=False)
               csv_buf.seek(0)
 
               ds_id = os.environ['M_ID'].strip()
               api_url = f"https://api.recommender.gigalogy.com/v1/gpt/datasets_ts/{ds_id}/file"
-              headers = {
+              api_headers = {
                   "api-key": os.environ['M_API'].strip(),
                   "project-key": os.environ['M_PROJ'].strip()
               }
               
-              response = requests.put(api_url, headers=headers, files={'dataset_file': ('all_japan.csv', csv_buf, 'text/csv')})
-              print(f"Final Status: {response.status_code}")
-              print(f"Maira Response: {response.text}")
+              response = requests.put(api_url, headers=api_headers, files={'dataset_file': ('all_japan.csv', csv_buf, 'text/csv')})
+              print(f"Final Status: {response.status_code} | Result: {response.text}")
           else:
-              print("No data collected from any site.")
+              print("No data collected. Check if the website table structure has changed.")
           EOF
