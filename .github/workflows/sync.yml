@@ -14,7 +14,7 @@ jobs:
           python-version: '3.10'
 
       - name: Install Libs
-        run: pip install requests pandas beautifulsoup4
+        run: pip install requests pandas beautifulsoup4 urllib3
 
       - name: Scrape All Regions
         env:
@@ -28,7 +28,24 @@ jobs:
           import pandas as pd
           import io
           import os
+          import ssl
           from datetime import datetime
+          from requests.adapters import HTTPAdapter
+          from urllib3.poolmanager import PoolManager
+          from urllib3.util import ssl_
+
+          # FORCING MODERN TLS HANDSHAKE
+          class TLSAdapter(HTTPAdapter):
+              def init_poolmanager(self, connections, maxsize, block=False):
+                  ctx = ssl_.create_urllib3_context(ssl_version=ssl.PROTOCOL_TLS_CLIENT)
+                  ctx.options |= 0x4  # OP_LEGACY_SERVER_CONNECT to be extra safe
+                  ctx.check_hostname = False
+                  self.poolmanager = PoolManager(
+                      num_pools=connections,
+                      maxsize=maxsize,
+                      block=block,
+                      ssl_context=ctx
+                  )
 
           regions = {
               "hokkaido": "https://kankyo-ichiba.jp/hokkaido",
@@ -42,32 +59,32 @@ jobs:
               "kyushu": "https://kankyo-ichiba.jp/kyushu"
           }
 
-          # HEADERS: This makes our script look like a real browser
           headers = {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-              'Accept-Language': 'ja,en-US;q=0.7,en;q=0.3',
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
           }
 
+          session = requests.Session()
+          session.mount('https://', TLSAdapter())
+          
           all_frames = []
           today_date = datetime.now().strftime('%Y-%m-%d')
 
           for name, url in regions.items():
               try:
-                  print(f"Scraping {name}...")
-                  # verify=False bypasses some SSL handshake issues
-                  res = requests.get(url, headers=headers, timeout=15)
+                  print(f"Forcing connection to {name}...")
+                  # verify=False is the 'cheat' to bypass SSL certificate issues
+                  res = session.get(url, headers=headers, timeout=20, verify=False)
                   res.raise_for_status()
                   
                   soup = BeautifulSoup(res.text, 'html.parser')
                   data_list = []
                   
-                  # Look specifically for the price table
+                  # Find all table rows
                   for row in soup.find_all('tr'):
                       cols = row.find_all('td')
                       if len(cols) >= 2:
-                          time_text = cols[0].text.strip()
-                          price_text = cols[1].text.strip().replace('円', '').replace(',', '').strip()
+                          time_text = cols[0].get_text(strip=True)
+                          price_text = cols[1].get_text(strip=True).replace('円', '').replace(',', '').strip()
                           
                           try:
                               price_val = float(price_text)
@@ -79,7 +96,7 @@ jobs:
                   if data_list:
                       all_frames.append(pd.DataFrame(data_list).set_index('timestamp'))
               except Exception as e:
-                  print(f"Failed to scrape {name}: {e}")
+                  print(f"Failed to force scrape {name}: {e}")
 
           if all_frames:
               final_df = pd.concat(all_frames, axis=1).sort_index().reset_index()
@@ -97,5 +114,5 @@ jobs:
               response = requests.put(api_url, headers=api_headers, files={'dataset_file': ('all_japan.csv', csv_buf, 'text/csv')})
               print(f"Final Status: {response.status_code} | Result: {response.text}")
           else:
-              print("No data collected. Check if the website table structure has changed.")
+              print("Brute force failed. The site may be blocking GitHub IP addresses.")
           EOF
