@@ -1,7 +1,7 @@
-name: JEPX Master All-City Sync
+name: Kankyo-Ichiba Master All-Region Sync
 on:
   schedule:
-    - cron: "45 * * * *" 
+    - cron: "50 * * * *" # Runs 10 mins before the hour
   workflow_dispatch: 
 
 jobs:
@@ -14,9 +14,9 @@ jobs:
           python-version: '3.10'
 
       - name: Install Libs
-        run: pip install requests pandas
+        run: pip install requests pandas beautifulsoup4
 
-      - name: Run Sync
+      - name: Scrape All Regions
         env:
           M_API: ${{ secrets.MAIRA_API_KEY }}
           M_PROJ: ${{ secrets.MAIRA_PROJECT_KEY }}
@@ -24,59 +24,73 @@ jobs:
         run: |
           python - <<EOF
           import requests
+          from bs4 import BeautifulSoup
           import pandas as pd
           import io
           import os
           from datetime import datetime
 
-          # 1. Get Data from JEPX
-          url = "https://www.jepx.jp/market/excel/spot_2026.csv"
-          df = pd.read_csv(url, encoding='shift_jis')
-          
-          # 2. FILTER FOR TODAY ONLY
-          # JEPX uses YYYY/MM/DD. This ensures we start from "Today"
-          today_str = datetime.now().strftime('%Y/%m/%d')
-          df_today = df[df.iloc[:, 0] == today_str].copy()
-
-          if df_today.empty:
-              print(f"No data for {today_str} yet. Using last 48 slots as fallback.")
-              df_today = df.tail(48).copy()
-
-          # 3. FORMAT TIME & GRAB ALL REGIONS
-          def to_iso(row):
-              d, s = row.iloc[0].replace('/', '-'), int(row.iloc[1])
-              return f"{d}T{(s-1)//2:02}:{'00' if s%2!=0 else '30'}:00Z"
-          
-          # Mapping every JEPX column to its region name
-          final_df = pd.DataFrame()
-          final_df['timestamp'] = df_today.apply(to_iso, axis=1)
-          final_df['hokkaido']  = df_today.iloc[:, 4].astype(float)
-          final_df['tohoku']    = df_today.iloc[:, 5].astype(float)
-          final_df['tokyo']     = df_today.iloc[:, 11].astype(float)
-          final_df['chubu']     = df_today.iloc[:, 12].astype(float)
-          final_df['hokuriku']  = df_today.iloc[:, 13].astype(float)
-          final_df['kansai']    = df_today.iloc[:, 14].astype(float)
-          final_df['chugoku']   = df_today.iloc[:, 15].astype(float)
-          final_df['shikoku']   = df_today.iloc[:, 16].astype(float)
-          final_df['kyushu']    = df_today.iloc[:, 19].astype(float)
-
-          # 4. Push to Maira
-          csv_buf = io.BytesIO()
-          final_df.to_csv(csv_buf, index=False)
-          csv_buf.seek(0)
-
-          ds_id = os.environ['M_ID'].strip()
-          api_url = f"https://api.recommender.gigalogy.com/v1/gpt/datasets_ts/{ds_id}/file"
-          
-          headers = {
-              "api-key": os.environ['M_API'].strip(),
-              "project-key": os.environ['M_PROJ'].strip()
+          # Every regional site on Kankyo-Ichiba
+          regions = {
+              "hokkaido": "https://kankyo-ichiba.jp/hokkaido",
+              "tohoku": "https://kankyo-ichiba.jp/tohoku",
+              "tokyo": "https://kankyo-ichiba.jp/tokyo",
+              "chubu": "https://kankyo-ichiba.jp/chubu",
+              "hokuriku": "https://kankyo-ichiba.jp/hokuriku",
+              "kansai": "https://kankyo-ichiba.jp/kansai",
+              "chugoku": "https://kankyo-ichiba.jp/chugoku",
+              "shikoku": "https://kankyo-ichiba.jp/shikoku",
+              "kyushu": "https://kankyo-ichiba.jp/kyushu"
           }
-          
-          files = {'dataset_file': ('all_japan_energy.csv', csv_buf, 'text/csv')}
-          response = requests.put(api_url, headers=headers, files=files)
-          
-          print(f"Syncing data for: {today_str}")
-          print(f"Status: {response.status_code}")
-          print(f"Result: {response.text}")
+
+          all_frames = []
+          today_date = datetime.now().strftime('%Y-%m-%d')
+
+          for name, url in regions.items():
+              try:
+                  print(f"Scraping {name}...")
+                  res = requests.get(url, timeout=10)
+                  soup = BeautifulSoup(res.text, 'html.parser')
+                  
+                  # Find the table - Kankyo-Ichiba usually puts prices in <td> inside <tr>
+                  data_list = []
+                  for row in soup.find_all('tr'):
+                      cols = row.find_all('td')
+                      if len(cols) >= 2:
+                          time_text = cols[0].text.strip() # e.g., "10:30"
+                          price_text = cols[1].text.strip().replace('円', '').replace(',', '')
+                          
+                          try:
+                              price_val = float(price_text)
+                              timestamp = f"{today_date}T{time_text}:00Z"
+                              data_list.append({"timestamp": timestamp, name: price_val})
+                          except ValueError:
+                              continue
+                  
+                  if data_list:
+                      all_frames.append(pd.DataFrame(data_list).set_index('timestamp'))
+              except Exception as e:
+                  print(f"Failed to scrape {name}: {e}")
+
+          # Combine all regions into one big table
+          if all_frames:
+              final_df = pd.concat(all_frames, axis=1).sort_index().reset_index()
+              
+              # Push to Maira
+              csv_buf = io.BytesIO()
+              final_df.to_csv(csv_buf, index=False)
+              csv_buf.seek(0)
+
+              ds_id = os.environ['M_ID'].strip()
+              api_url = f"https://api.recommender.gigalogy.com/v1/gpt/datasets_ts/{ds_id}/file"
+              headers = {
+                  "api-key": os.environ['M_API'].strip(),
+                  "project-key": os.environ['M_PROJ'].strip()
+              }
+              
+              response = requests.put(api_url, headers=headers, files={'dataset_file': ('all_japan.csv', csv_buf, 'text/csv')})
+              print(f"Final Status: {response.status_code}")
+              print(f"Maira Response: {response.text}")
+          else:
+              print("No data collected from any site.")
           EOF
