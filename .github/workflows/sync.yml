@@ -1,8 +1,9 @@
-name: JEPX Official All-Region Sync
+name: JEPX Daily Master Sync
 on:
   schedule:
-    - cron: "50 * * * *" 
-  workflow_dispatch: 
+    # Runs once a day at 17:00 JST (08:00 UTC)
+    - cron: "0 8 * * *" 
+  workflow_dispatch: # Allows you to run it manually whenever you want
 
 jobs:
   build:
@@ -16,7 +17,7 @@ jobs:
       - name: Install Libs
         run: pip install requests pandas
 
-      - name: Run Official Sync
+      - name: Run Daily Sync
         env:
           M_API: ${{ secrets.MAIRA_API_KEY }}
           M_PROJ: ${{ secrets.MAIRA_PROJECT_KEY }}
@@ -27,47 +28,53 @@ jobs:
           import pandas as pd
           import io
           import os
-          from datetime import datetime
+          from datetime import datetime, timedelta
 
-          # 1. Official Source (This is what Kankyo-Ichiba uses internally)
+          # 1. Fetch Official Data
           url = "https://www.jepx.jp/market/excel/spot_2026.csv"
           df = pd.read_csv(url, encoding='shift_jis')
           
-          # 2. Filter for Today
-          today_str = datetime.now().strftime('%Y/%m/%d')
-          df_today = df[df.iloc[:, 0] == today_str].copy()
+          # 2. Get Today and Tomorrow for a 48-hour master block
+          # This ensures we always have the most current "Live" and "Next Day" data
+          target_dates = [
+              datetime.now().strftime('%Y/%m/%d'),
+              (datetime.now() + timedelta(days=1)).strftime('%Y/%m/%d')
+          ]
+          
+          df_batch = df[df.iloc[:, 0].isin(target_dates)].copy()
 
-          if df_today.empty:
-              df_today = df.tail(48).copy()
-
-          # 3. Format Time (Slot 1-48 to ISO Time)
+          # 3. Format Time to ISO-8601
           def to_iso(row):
               d, s = row.iloc[0].replace('/', '-'), int(row.iloc[1])
               return f"{d}T{(s-1)//2:02}:{'00' if s%2!=0 else '30'}:00Z"
           
           final_df = pd.DataFrame()
-          final_df['timestamp'] = df_today.apply(to_iso, axis=1)
+          final_df['timestamp'] = df_batch.apply(to_iso, axis=1)
           
-          # Mapping to match all regional markets
-          final_df['hokkaido'] = df_today.iloc[:, 4].astype(float)
-          final_df['tohoku']   = df_today.iloc[:, 5].astype(float)
-          final_df['tokyo']    = df_today.iloc[:, 11].astype(float)
-          final_df['chubu']    = df_today.iloc[:, 12].astype(float)
-          final_df['hokuriku'] = df_today.iloc[:, 13].astype(float)
-          final_df['kansai']   = df_today.iloc[:, 14].astype(float)
-          final_df['chugoku']  = df_today.iloc[:, 15].astype(float)
-          final_df['shikoku']  = df_today.iloc[:, 16].astype(float)
-          final_df['kyushu']   = df_today.iloc[:, 19].astype(float)
+          # Mapping all regions (The same columns as before)
+          regions = {
+              'hokkaido': 4, 'tohoku': 5, 'tokyo': 11, 'chubu': 12, 
+              'hokuriku': 13, 'kansai': 14, 'chugoku': 15, 'shikoku': 16, 'kyushu': 19
+          }
+          
+          for name, col_idx in regions.items():
+              final_df[name] = df_batch.iloc[:, col_idx].astype(float)
 
-          # 4. Push to Maira
+          # 4. Push to Maira (Hitting the TS File Endpoint)
           csv_buf = io.BytesIO()
           final_df.to_csv(csv_buf, index=False)
           csv_buf.seek(0)
 
           ds_id = os.environ['M_ID'].strip()
           api_url = f"https://api.recommender.gigalogy.com/v1/gpt/datasets_ts/{ds_id}/file"
-          headers = {"api-key": os.environ['M_API'].strip(), "project-key": os.environ['M_PROJ'].strip()}
+          headers = {
+              "api-key": os.environ['M_API'].strip(),
+              "project-key": os.environ['M_PROJ'].strip()
+          }
           
-          response = requests.put(api_url, headers=headers, files={'dataset_file': ('japan_energy.csv', csv_buf, 'text/csv')})
+          response = requests.put(api_url, headers=headers, files={'dataset_file': ('daily_batch.csv', csv_buf, 'text/csv')})
+          
+          print(f"Daily Sync for {target_dates}")
+          print(f"Maira Endpoint: {api_url}")
           print(f"Status: {response.status_code} | Result: {response.text}")
           EOF
