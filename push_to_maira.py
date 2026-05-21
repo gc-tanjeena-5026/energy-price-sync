@@ -7,13 +7,13 @@ from datetime import datetime, timedelta
 
 
 def get_jepx_data():
-    # 1. Use an open-source CORS proxy tool to shield the GitHub IP identity
+    # Masking the connection using an open-source mirror proxy to dodge the network block
     url = "https://api.allorigins.win/raw?url=https://www.jepx.org/market/excel/spot_2026.csv"
-
+    
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
     }
-
+    
     print("Routing request through network mirror proxy...")
     try:
         response = requests.get(url, headers=headers, timeout=25)
@@ -21,7 +21,6 @@ def get_jepx_data():
         return pd.read_csv(io.StringIO(response.content.decode('shift_jis')))
     except Exception as e:
         print(f"Proxy route failed. Attempting direct fallback connection...")
-        # 2. Backup Fallback: Try direct connection if proxy is busy
         try:
             direct_url = "https://www.jepx.org/market/excel/spot_2026.csv"
             response = requests.get(direct_url, headers=headers, timeout=15)
@@ -30,15 +29,6 @@ def get_jepx_data():
         except Exception as direct_err:
             print(f"Upstream Dependency Error: All connection strategies exhausted. Reason: {direct_err}")
             sys.exit(1)
-
-    try:
-        # Pass the headers into the get request
-        response = requests.get(url, headers=headers, timeout=15)
-        response.raise_for_status()
-        return pd.read_csv(io.StringIO(response.content.decode('shift_jis')))
-    except Exception as e:
-        print(f"Upstream Dependency Error: Failed to fetch JEPX data. Reason: {e}")
-        sys.exit(1)
 
 
 def convert_slot_to_time(date_str, slot_num):
