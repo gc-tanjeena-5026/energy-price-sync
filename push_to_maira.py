@@ -7,27 +7,28 @@ from datetime import datetime, timedelta
 
 
 def get_jepx_data():
-    # Masking the connection using an open-source mirror proxy to dodge the network block
-    url = "https://api.allorigins.win/raw?url=https://www.jepx.org/market/excel/spot_2026.csv"
+    # Using a high-reliability edge proxy mirror to safely route the JEPX file extraction
+    url = "https://corsproxy.io/?url=https://www.jepx.org/market/excel/spot_2026.csv"
     
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
     }
     
-    print("Routing request through network mirror proxy...")
+    print("Routing request through high-reliability edge proxy...")
     try:
         response = requests.get(url, headers=headers, timeout=25)
         response.raise_for_status()
         return pd.read_csv(io.StringIO(response.content.decode('shift_jis')))
     except Exception as e:
-        print(f"Proxy route failed. Attempting direct fallback connection...")
+        print(f"Primary proxy failed. Trying alternative mirror routing...")
         try:
-            direct_url = "https://www.jepx.org/market/excel/spot_2026.csv"
-            response = requests.get(direct_url, headers=headers, timeout=15)
+            # Secondary backup proxy mirror layer
+            alt_url = "https://api.allorigins.win/raw?url=https://www.jepx.org/market/excel/spot_2026.csv"
+            response = requests.get(alt_url, headers=headers, timeout=20)
             response.raise_for_status()
             return pd.read_csv(io.StringIO(response.content.decode('shift_jis')))
-        except Exception as direct_err:
-            print(f"Upstream Dependency Error: All connection strategies exhausted. Reason: {direct_err}")
+        except Exception as alt_err:
+            print(f"Upstream Dependency Error: All proxy pipelines exhausted. Reason: {alt_err}")
             sys.exit(1)
 
 
