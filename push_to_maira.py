@@ -9,8 +9,15 @@ from datetime import datetime, timedelta
 def get_jepx_data():
     # Fetch direct JEPX HTTP CSV data
     url = "https://www.jepx.org/market/excel/spot_2026.csv"
+
+    # Standard desktop browser identity header to bypass basic firewalls
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+
     try:
-        response = requests.get(url, timeout=15)
+        # Pass the headers into the get request
+        response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
         return pd.read_csv(io.StringIO(response.content.decode('shift_jis')))
     except Exception as e:
