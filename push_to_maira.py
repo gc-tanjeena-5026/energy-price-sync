@@ -7,13 +7,29 @@ from datetime import datetime, timedelta
 
 
 def get_jepx_data():
-    # Fetch direct JEPX HTTP CSV data
-    url = "https://www.jepx.org/market/excel/spot_2026.csv"
+    # 1. Use an open-source CORS proxy tool to shield the GitHub IP identity
+    url = "https://api.allorigins.win/raw?url=https://www.jepx.org/market/excel/spot_2026.csv"
 
-    # Standard desktop browser identity header to bypass basic firewalls
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
     }
+
+    print("Routing request through network mirror proxy...")
+    try:
+        response = requests.get(url, headers=headers, timeout=25)
+        response.raise_for_status()
+        return pd.read_csv(io.StringIO(response.content.decode('shift_jis')))
+    except Exception as e:
+        print(f"Proxy route failed. Attempting direct fallback connection...")
+        # 2. Backup Fallback: Try direct connection if proxy is busy
+        try:
+            direct_url = "https://www.jepx.org/market/excel/spot_2026.csv"
+            response = requests.get(direct_url, headers=headers, timeout=15)
+            response.raise_for_status()
+            return pd.read_csv(io.StringIO(response.content.decode('shift_jis')))
+        except Exception as direct_err:
+            print(f"Upstream Dependency Error: All connection strategies exhausted. Reason: {direct_err}")
+            sys.exit(1)
 
     try:
         # Pass the headers into the get request
