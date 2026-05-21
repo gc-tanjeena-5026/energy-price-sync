@@ -1,4 +1,4 @@
-name: JEPX Energy Price Sync
+name: Install Dependencies
 
 on:
   schedule:
