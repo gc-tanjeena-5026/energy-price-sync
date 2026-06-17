@@ -1,14 +1,14 @@
-name: Install Dependencies
+name: Kankyo Daily Sync
 
 on:
   schedule:
-    # 17:00 JST is 08:00 UTC
-    - cron: '0 8 * * *'
-  workflow_dispatch: # Allows manual trigger testing
+    - cron: '0 8 * * *'  # 17:00 JST = 08:00 UTC
+  workflow_dispatch:
 
 jobs:
   sync-prices:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -16,14 +16,22 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Install Dependencies
         run: |
-          pip install requests pandas
+          pip install requests playwright
+          python -m playwright install chromium
+          python -m playwright install-deps chromium
 
-      - name: Run Ingestion Script
+      - name: Scrape Kankyo Site
+        run: python scrape_kankyo.py
+
+      - name: Clean and Save CSV
+        run: python clean_and_save.py
+
+      - name: Push to Gigalogy
         env:
-          MAIRA_API_KEY: ${{ secrets.API_KEY }}
-          MAIRA_PROJECT_KEY: ${{ secrets.PROJECT_KEY }}
+          API_KEY: ${{ secrets.API_KEY }}
+          PROJECT_KEY: ${{ secrets.PROJECT_KEY }}
         run: python push_to_maira.py
