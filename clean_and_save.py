@@ -2,6 +2,7 @@ import ast
 import csv
 import re
 import os
+from datetime import datetime
 
 # Read the raw data file
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -74,13 +75,43 @@ for region_data in all_data:
             price = extract_price(row_text_clean)
             rows.append([region, "monthly_highest", price])
 
-# Write clean CSV
+# ── Safety check: refuse to save if too few rows were extracted ──────────────
+MINIMUM_EXPECTED_ROWS = 50  # 9 regions x ~9 metrics each = ~81 rows expected
+
+if len(rows) < MINIMUM_EXPECTED_ROWS:
+    print(f"ERROR: Only {len(rows)} rows extracted — expected at least {MINIMUM_EXPECTED_ROWS}.")
+    print("This likely means scraping failed for one or more regions.")
+    print("Refusing to save a partial/incomplete CSV.")
+    exit(1)
+
+# ── Build a proper timestamp for each row based on its metric name ──────────
+today_date = datetime.now().strftime("%Y-%m-%d")
+
+def build_timestamp(metric_name, fallback_date):
+    """
+    Extracts HH:MM from metric names like 'cheapest_price_10:00' or 'highest_price_18:30'
+    and builds a proper timestamp reflecting the actual time that price occurred.
+    Falls back to 00:00:00 for summary stats (all_hours_avg, monthly_avg, etc.)
+    since those represent the whole day/month, not a single moment.
+    """
+    time_match = re.search(r'(\d{1,2}):(\d{2})', metric_name)
+    if time_match:
+        hour, minute = time_match.groups()
+        return f"{fallback_date}T{hour.zfill(2)}:{minute}:00"
+    else:
+        return f"{fallback_date}T00:00:00"
+
+# ── Write clean CSV with per-row timestamps ──────────────────────────────────
 with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
     writer = csv.writer(f)
-    writer.writerow(["region", "metric", "price_yen_per_kwh"])
-    writer.writerows(rows)
+    writer.writerow(["timestamp", "region", "metric", "price_yen_per_kwh"])
+    for row in rows:
+        region, metric, price = row
+        timestamp = build_timestamp(metric, today_date)
+        writer.writerow([timestamp, region, metric, price])
 
-print(f"Done! Saved {len(rows)} rows to kankyo_data.csv")
+print(f"Done! Saved {len(rows)} rows to kankyo_data.csv with per-metric timestamps")
 print("\nPreview:")
-for r in rows[:10]:
-    print(r)
+for region, metric, price in rows[:10]:
+    ts = build_timestamp(metric, today_date)
+    print([ts, region, metric, price])
