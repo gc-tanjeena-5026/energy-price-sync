@@ -18,7 +18,7 @@ async def scrape_kankyo():
 
     all_extracted_data = []
     MAX_RETRIES = 3
-    TIMEOUT_MS = 30000  # back to a reasonable 30s since the real issue was the URL, not speed
+    TIMEOUT_MS = 30000
 
     async with async_playwright() as p:
         print("Launching headless Chromium browser via Playwright...")
@@ -40,8 +40,18 @@ async def scrape_kankyo():
 
             for attempt in range(1, MAX_RETRIES + 1):
                 try:
+                    # Force a hard navigation each time, not relying on SPA routing
                     await page.goto(url, wait_until="networkidle", timeout=TIMEOUT_MS)
                     await page.wait_for_selector("table", timeout=TIMEOUT_MS)
+
+                    # Extra wait to let JS finish updating the numbers after navigation
+                    await page.wait_for_timeout(2000)
+
+                    # Wait specifically for the average price box to have real content
+                    await page.wait_for_function(
+                        "document.querySelector('.da_24 .index_num')?.innerText.trim().length > 0",
+                        timeout=TIMEOUT_MS
+                    )
 
                     rows_data = await page.evaluate("""
                         () => {
@@ -51,6 +61,13 @@ async def scrape_kankyo():
                             );
                         }
                     """)
+
+                    # Sanity check: grab the actual average price box value to log it
+                    avg_price_check = await page.evaluate(
+                        "document.querySelector('.da_24 .index_num')?.innerText.trim()"
+                    )
+                    print(f"  -> {region_name} all_hours_avg from page: {avg_price_check}")
+
                     all_extracted_data.append({"region": region_name, "matrix": rows_data})
                     print(f"Successfully scraped matrix data for: {region_name} (attempt {attempt})")
                     success = True
@@ -66,6 +83,16 @@ async def scrape_kankyo():
                 print(f"FINAL FAILURE: Could not scrape '{region_name}' after {MAX_RETRIES} attempts.")
 
         await browser.close()
+
+    # Duplicate detection across regions — catches stale-page bugs immediately
+    seen_signatures = {}
+    for entry in all_extracted_data:
+        region = entry["region"]
+        signature = str(entry["matrix"][5:11])  # the core price rows
+        if signature in seen_signatures:
+            print(f"WARNING: '{region}' has IDENTICAL data to '{seen_signatures[signature]}' — likely a stale scrape!")
+        else:
+            seen_signatures[signature] = region
 
     current_dir = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(current_dir, "raw_data.txt")
